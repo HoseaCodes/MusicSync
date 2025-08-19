@@ -1,65 +1,77 @@
 #!/usr/bin/env bash
-# Robust BT autoconnect with waits + retries + logging
+# Auto-pair, trust, and connect a BT speaker; retry + set default sink
 
 MAC="41:42:42:39:FA:61"
-TRIES=10          # how many times to try
-SLEEP_BETWEEN=5   # seconds between tries
+TRIES=10           # connection attempts
+SLEEP_BETWEEN=5    # seconds between attempts
 
-log() { echo "[bt-autoconnect] $*"; logger -t bt-autoconnect "$*"; }
+log(){ echo "[bt-autoconnect] $*"; logger -t bt-autoconnect "$*"; }
 
-# Make sure we’re on bash and using UNIX line endings; run with: /bin/bash this_script.sh
+set -u
 
-set -u  # don’t exit on non-zero to allow retries
+# --- helpers ---------------------------------------------------------------
+bt() { /usr/bin/bluetoothctl "$@"; }
 
-# Wait for the bluetooth service
+is_connected(){ bt info "$MAC" 2>/dev/null | grep -q "Connected: yes"; }
+is_paired(){    bt info "$MAC" 2>/dev/null | grep -q "Paired: yes"; }
+is_trusted(){   bt info "$MAC" 2>/dev/null | grep -q "Trusted: yes"; }
+
+# --- wait for BT service ---------------------------------------------------
 log "Waiting for bluetooth.service…"
-for i in $(seq 1 20); do
-  if systemctl is-active --quiet bluetooth.service; then
-    log "bluetooth.service is active."
-    break
-  fi
+for _ in $(seq 1 20); do
+  systemctl is-active --quiet bluetooth.service && { log "bluetooth.service is active."; break; }
   sleep 1
 done
 
-# Ensure controller is powered on
+# --- power on & agent ------------------------------------------------------
 rfkill unblock bluetooth 2>/dev/null || true
-echo -e "power on\nagent on\ndefault-agent\n" | /usr/bin/bluetoothctl >/dev/null 2>&1
+bt power on   >/dev/null 2>&1 || true
+bt agent on   >/dev/null 2>&1 || true
+bt default-agent >/dev/null 2>&1 || true
 
-# Try to connect several times
+# --- ensure paired & trusted ----------------------------------------------
+if ! is_paired; then
+  log "Device not paired; attempting pair…"
+  # many speakers need to be in pairing mode the first time
+  bt pair "$MAC" >/dev/null 2>&1 || log "Pair attempt returned non‑zero (may still succeed if already paired)."
+fi
+
+if ! is_trusted; then
+  log "Marking device as trusted…"
+  bt trust "$MAC" >/dev/null 2>&1 || true
+fi
+
+# --- connect with retries --------------------------------------------------
+connected=0
 for attempt in $(seq 1 "$TRIES"); do
   log "Attempt $attempt/$TRIES: connecting to $MAC…"
-  /usr/bin/bluetoothctl connect "$MAC" >/dev/null 2>&1
-
-  # Check connection state
-  if /usr/bin/bluetoothctl info "$MAC" 2>/dev/null | grep -q "Connected: yes"; then
+  bt connect "$MAC" >/dev/null 2>&1 || true
+  if is_connected; then
     log "Connected to $MAC."
     connected=1
     break
   fi
-
   sleep "$SLEEP_BETWEEN"
 done
 
-if [ "${connected:-0}" -ne 1 ]; then
+if [ "$connected" -ne 1 ]; then
   log "Failed to connect after $TRIES attempts."
   exit 1
 fi
 
-# Give PulseAudio time to register sink and set it default (best effort)
+# --- audio sink (best effort) ----------------------------------------------
 sleep 3
 if command -v pactl >/dev/null 2>&1; then
-  # Prefer A2DP if available (does nothing if not applicable)
   if pactl list cards short | grep -q "bluez_card"; then
     CARD=$(pactl list cards short | awk '/bluez_card/ {print $1; exit}')
     pactl set-card-profile "$CARD" a2dp-sink >/dev/null 2>&1 || true
   fi
-
   SINK=$(pactl list short sinks | awk '/bluez/ {print $1; exit}')
   if [ -n "$SINK" ]; then
     pactl set-default-sink "$SINK" || true
     log "Default sink set to $SINK."
   else
-    log "No bluez sink found yet; audio may still route after a moment."
+    log "No bluez sink found yet; audio may route after a moment."
   fi
 else
   log "pactl not found; skipping default sink selection."
