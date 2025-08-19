@@ -1,1 +1,30 @@
-.
+# /etc/systemd/system/bt-autoconnect.service
+# Service to auto-connect a Bluetooth speaker and set it as default sink
+
+[Unit]
+Description=Auto-connect to Bluetooth speaker
+After=bluetooth.service sound.target network.target
+Wants=bluetooth.service
+
+[Service]
+# Run once at boot
+Type=oneshot
+
+# Change this to match your Pi username
+User=hosead6168
+
+# Bluetooth group gives permission to use the BT stack
+Group=bluetooth
+
+# Needed so pactl can talk to PulseAudio in your user session
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+# Delay slightly to ensure BT + PulseAudio are alive
+ExecStartPre=/bin/sleep 8
+
+# Path to your autoconnect script
+ExecStart=/bin/bash /home/hosead6168/Desktop/scripts/bt-autoconnect.sh
+
+[Install]
+# Start service during normal boot
+WantedBy=multi-user.target
