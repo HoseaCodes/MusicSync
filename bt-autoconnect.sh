@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Robust BT autoconnect with waits + retries + logging
 
-MAC="AA:BB:CC:DD:EE:FF"
+MAC="41:42:42:39:FA:61"
 TRIES=10          # how many times to try
 SLEEP_BETWEEN=5   # seconds between tries
 
